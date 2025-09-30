@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Mapa Fullscreen - Distâncias</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    .full-height { height: 100vh; }
+    #map { height: 100%; width: 100%; }
+    .scroll-column { overflow-y: auto; height: 100vh; }
+    textarea { resize: vertical; }
+    #fileInput { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="container-fluid">
+  <div class="row full-height">
+    <div class="col-lg-4 col-md-5 bg-light scroll-column d-flex flex-column">
+      <div style="flex-grow:1; overflow-y:auto;">
+        <h4 class="mt-3 mb-3">Distância entre pontos</h4>
+        <p class="text-muted small">Formato por linha: <code>lat1 long1 lat2 long2</code></p>
+
+        <textarea id="inputCoords" class="form-control mb-3" rows="5">-22.725165 -47.6493269 -22.9056391 -47.059564</textarea>
+        
+        <!-- Botões lado a lado -->
+        <div class="d-flex mb-3">
+          <button id="calcButton" class="btn btn-primary flex-grow-1 me-2">
+            Calcular
+          </button>
+          <button id="clearButton" class="btn btn-outline-danger">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+
+        <div id="output" class="mt-4">
+          <h6>Resultados:</h6>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm table-striped">
+              <thead class="table-light">
+                <tr>
+                  <th>#</th>
+                  <th>Ponto A (lat, long)</th>
+                  <th>Ponto B (lat, long)</th>
+                  <th>Distância (m)</th>
+                </tr>
+              </thead>
+              <tbody id="resultsTable"></tbody>
+              <tfoot>
+                <tr class="table-secondary">
+                  <td colspan="3"><strong>Total</strong></td>
+                  <td id="totalDistance">0</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <div class="row g-2">
+          <div class="col-6">
+            <button id="exportButton" class="btn btn-outline-secondary w-100">Exportar TXT</button>
+          </div>
+          <div class="col-6">
+            <button id="importButton" class="btn btn-outline-secondary w-100">Importar TXT</button>
+          </div>
+        </div>
+        <input type="file" id="fileInput" accept=".txt" />
+      </div>
+
+      <footer class="bg-light text-center text-muted py-2 border-top">
+        <small>
+          Criado por <a href="https://www.linkedin.com/in/gabrielgortan/" target="_blank" rel="noopener noreferrer">Gabriel Gortan</a>
+        </small>
+      </footer>
+    </div>
+
+    <div class="col-lg-8 col-md-7 p-0"><div id="map"></div></div>
+  </div>
+</div>
+
+<div class="modal fade" id="alertModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Aviso</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="alertModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+        <button type="button" class="btn btn-primary" id="alertModalConfirm" style="display:none;">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+  const map = L.map('map').setView([-22.45, -51.45], 10);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap'}).addTo(map);
+
+  const featuresLayer = L.layerGroup().addTo(map);
+  let features = [];
+
+  function createIcon(color) {
+    return new L.Icon({
+      iconUrl: `https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-2x-${color}.png`,
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+      iconSize: [25,41], iconAnchor:[12,41], popupAnchor:[1,-34], shadowSize:[41,41]
+    });
+  }
+  const blueIcon = createIcon("blue"), redIcon = createIcon("red");
+
+  function addMarker(lat, lng, icon, label) {
+    return L.marker([lat,lng], {icon}).addTo(featuresLayer)
+      .bindPopup(`<strong>${label}</strong><br>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`);
+  }
+
+  function addRow(index, lat1,long1,lat2,long2,distance) {
+    const row=document.createElement('tr');
+    row.innerHTML=`
+      <td>${index+1}</td>
+      <td>${lat1.toFixed(6)}, ${long1.toFixed(6)}</td>
+      <td>${lat2.toFixed(6)}, ${long2.toFixed(6)}</td>
+      <td>${distance}</td>`;
+    row.style.cursor='pointer';
+    row.onclick=()=>highlightFeature(index);
+    document.getElementById('resultsTable').appendChild(row);
+  }
+
+  function parseLine(line){
+    const parts=line.trim().split(/\s+/).map(Number);
+    return (parts.length===4 && parts.every(n=>!isNaN(n)))? parts:null;
+  }
+
+  function highlightFeature(index){
+    features.forEach((f,i)=>{
+      const active=i===index;
+      f.markerA.setOpacity(active?1:0.3);
+      f.markerB.setOpacity(active?1:0.3);
+      f.linha.setStyle({opacity:active?1:0.3, weight:active?4:2});
+      if(active){
+        map.fitBounds(f.linha.getBounds(), {padding:[20,20]});
+        [f.linha,f.markerA,f.markerB].forEach(el=>el.bringToFront());
+      }
+    });
+  }
+
+  function showAlert(msg,isConfirm=false){
+    document.getElementById('alertModalBody').innerHTML=msg;
+    const confirmBtn=document.getElementById('alertModalConfirm');
+    confirmBtn.style.display=isConfirm?'inline-block':'none';
+    const modal=new bootstrap.Modal(document.getElementById('alertModal'));
+    if(isConfirm){
+      return new Promise(resolve=>{
+        confirmBtn.onclick=()=>{modal.hide();resolve(true);};
+        document.querySelector('[data-bs-dismiss="modal"]').onclick=()=>resolve(false);
+        modal.show();
+      });
+    } else { modal.show(); return Promise.resolve(false);}
+  }
+
+  document.getElementById('calcButton').onclick=()=>{
+    const lines=document.getElementById('inputCoords').value.trim().split('\n');
+    const table=document.getElementById('resultsTable'); table.innerHTML='';
+    document.getElementById('totalDistance').innerText=0;
+    featuresLayer.clearLayers(); features=[];
+
+    const bounds=[], distances=[];
+    lines.forEach((line,index)=>{
+      const coords=parseLine(line); if(!coords) return;
+      const [lat1,long1,lat2,long2]=coords;
+      const pointA=L.latLng(lat1,long1), pointB=L.latLng(lat2,long2);
+      const distance=pointA.distanceTo(pointB).toFixed(2);
+      const markerA=addMarker(lat1,long1,blueIcon,`Ponto A (${index+1})`);
+      const markerB=addMarker(lat2,long2,redIcon,`Ponto B (${index+1})`);
+      const linha=L.polyline([pointA,pointB],{color:'green',weight:3,opacity:1})
+        .addTo(featuresLayer).bindPopup(`<strong>Distância:</strong> ${distance} m`);
+      features.push({markerA,markerB,linha});
+      bounds.push(pointA,pointB); distances.push(+distance);
+      addRow(index,lat1,long1,lat2,long2,distance);
+    });
+
+    if(bounds.length>0){ 
+      map.fitBounds(L.latLngBounds(bounds),{padding:[20,20]});
+      document.getElementById('totalDistance').innerText=distances.reduce((a,b)=>a+b,0).toFixed(2);
+    }
+  };
+
+  document.getElementById('clearButton').onclick=()=>{
+    featuresLayer.clearLayers();
+    features=[];
+    document.getElementById('resultsTable').innerHTML='';
+    document.getElementById('totalDistance').innerText='0';
+  };
+
+  document.getElementById('exportButton').onclick=()=>{
+    const data=document.getElementById('inputCoords').value.trim();
+    if(!data){ showAlert('Não há dados para exportar.'); return;}
+    const blob=new Blob([data],{type:'text/plain'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download='coordenadas_distancias.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  };
+
+  document.getElementById('importButton').onclick=()=>document.getElementById('fileInput').click();
+
+  document.getElementById('fileInput').onchange=function(e){
+    const file=e.target.files[0]; if(!file) return;
+    if(!file.name.toLowerCase().endsWith('.txt')){ showAlert('Selecione um arquivo TXT.'); return;}
+    const reader=new FileReader();
+    reader.onload=async ev=>{
+      const content=ev.target.result.trim();
+      const valid=content.split('\n').map(parseLine).filter(l=>l).length;
+      if(!valid){ showAlert('Arquivo inválido.'); return;}
+      document.getElementById('inputCoords').value=content;
+      const ok=await showAlert(`Importado com sucesso! ${valid} linha(s).<br>Deseja calcular agora?`,true);
+      if(ok) document.getElementById('calcButton').click();
+    };
+    reader.onerror=()=>showAlert('Erro ao ler o arquivo.');
+    reader.readAsText(file);
+    e.target.value='';
+  };
+</script>
+</body>
+</html>
